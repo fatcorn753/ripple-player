@@ -4,7 +4,7 @@
 
 ## 使い方
 
-`index.html` をブラウザ(Chrome / Safari / Edge の最新版)で開き、音楽ファイルを選ぶか画面にドロップする。
+https://fatcorn753.github.io/ripple-player/ を開くか、`index.html` をブラウザ(Chrome / Safari / Edge の最新版)で開き、音楽ファイルを選ぶか画面にドロップする。
 ファイルは端末の外へ送らない。
 
 | 操作 | キー |
