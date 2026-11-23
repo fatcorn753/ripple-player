@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ja" data-accent="koke" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>波紋プレーヤー</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="water" role="img" aria-label="曲に合わせて、中央の CD から波紋が広がる水面"></canvas>
+
+<p class="gl-error" id="gl-error" role="alert" hidden></p>
+
+<div class="stage-empty" id="empty">
+  <div class="td-empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>
+    <p class="td-empty-title">音楽ファイルを選んでください</p>
+    <p>mp3 などをこの画面にドロップしても読み込めます。ファイルは端末の外に送りません。</p>
+    <button class="td-btn" data-variant="primary" type="button" data-action="open">ファイルを選ぶ</button>
+  </div>
+</div>
+
+<div class="drop-hint" id="drop-hint" hidden><p>ここで離すと読み込みます</p></div>
+
+<aside class="playlist" id="playlist" aria-label="再生リスト" hidden>
+  <header class="playlist-head">
+    <h2>再生リスト</h2>
+    <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="再生リストを閉じる" data-action="list">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </header>
+  <ol class="playlist-items" id="playlist-items"></ol>
+</aside>
+
+<div class="bar" id="bar">
+  <div class="seek-row">
+    <span class="num time" id="time-cur">0:00</span>
+    <input class="range seek" id="seek" type="range" min="0" max="0" step="0.1" value="0" aria-label="再生位置" disabled>
+    <span class="num time" id="time-dur">0:00</span>
+  </div>
+  <div class="bar-row">
+    <div class="now">
+      <p class="now-title" id="now-title">曲が選ばれていません</p>
+      <p class="now-sub" id="now-sub">ファイルを選ぶと再生できます</p>
+    </div>
+    <div class="transport">
+      <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="前の曲" data-action="prev">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 5v14"/><path d="M18 5 9 12l9 7V5Z"/></svg>
+      </button>
+      <button class="td-btn play" data-variant="primary" data-icon-only type="button" aria-label="再生" data-action="play" id="play">
+        <svg class="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l12-7.5L7 4.5Z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+      </button>
+      <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="次の曲" data-action="next">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 5v14"/><path d="M6 5l9 7-9 7V5Z"/></svg>
+      </button>
+    </div>
+    <div class="tools">
+      <label class="volume">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4v-5Z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg>
+        <input class="range" id="volume" type="range" min="0" max="1" step="0.01" value="0.9" aria-label="音量">
+      </label>
+      <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="再生リスト" aria-expanded="false" aria-controls="playlist" data-action="list" id="list-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </button>
+      <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="ファイルを追加" data-action="open">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<input id="file" type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus" multiple hidden>
+<audio id="audio" preload="metadata"></audio>
+<div class="td-toast-region" aria-live="polite"></div>
+
+<script src="water.js"></script>
+<script src="audio.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

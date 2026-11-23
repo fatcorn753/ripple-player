@@ -1,0 +1,169 @@
+/*
+ * 波紋プレーヤーの画面。水面は常に夜の色なので、操作部品もダーク固定にする(index.html の data-theme)。
+ */
+
+html, body { height: 100%; overflow: hidden; }
+body { background: var(--bg-canvas); overscroll-behavior: none; }
+
+#water {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* 操作バー。下から浮かせ、半透明にして水面を隠しすぎない */
+.bar {
+  position: fixed; z-index: 10;
+  left: max(var(--space-4), env(safe-area-inset-left, 0px));
+  right: max(var(--space-4), env(safe-area-inset-right, 0px));
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  max-width: 880px; margin-inline: auto;
+  /* minmax(0, 1fr) にしないと、長い曲名でバーが画面の外へ伸びる */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-3);
+  background: color-mix(in oklab, var(--bg-surface) 84%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--shape-panel);
+  box-shadow: var(--shadow-md);
+  transition: opacity var(--dur-slow) var(--ease-standard), translate var(--dur-slow) var(--ease-standard);
+}
+/* 再生中にしばらく触らないと隠れる。フォーカスがある間は隠さない */
+body[data-idle] .bar:not(:focus-within) { opacity: 0; translate: 0 var(--motion-enter-y); pointer-events: none; }
+body[data-idle] #water { cursor: none; }
+
+.seek-row { display: flex; align-items: center; gap: var(--space-3); }
+.time { font-size: var(--text-xs); color: var(--text-secondary); min-width: 3.5em; }
+.time:last-child { text-align: right; }
+
+.bar-row { display: flex; align-items: center; gap: var(--space-3); }
+.now { flex: 1; min-width: 0; }
+.now p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-title { font-weight: var(--weight-medium); }
+.now-sub { font-size: var(--text-xs); color: var(--text-secondary); }
+
+.transport, .tools { display: flex; align-items: center; gap: var(--space-1); }
+.play { width: var(--touch-min); min-height: var(--touch-min); border-radius: var(--radius-full); }
+.play .i-pause { display: none; }
+.play[aria-pressed="true"] .i-play { display: none; }
+.play[aria-pressed="true"] .i-pause { display: block; }
+
+.volume { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.volume svg { width: 18px; height: 18px; flex: none; }
+.volume .range { width: 96px; }
+
+/* スライダー */
+.range {
+  flex: 1; min-width: 0; margin: 0;
+  height: var(--touch-min);
+  background: transparent;
+  appearance: none; -webkit-appearance: none;
+  cursor: pointer;
+  --fill: 0%;
+}
+.range:disabled { cursor: default; opacity: 0.5; }
+/* 進んだ部分の塗り。WebKit には progress の疑似要素がないため、色の切り替え点を持つ linear-gradient で描く(装飾ではない) */
+.range::-webkit-slider-runnable-track {
+  height: 4px; border-radius: var(--radius-full);
+  background: linear-gradient(to right, var(--accent-solid) var(--fill), var(--border-control) var(--fill));
+}
+.range::-moz-range-track { height: 4px; border-radius: var(--radius-full); background: var(--border-control); }
+.range::-moz-range-progress { height: 4px; border-radius: var(--radius-full); background: var(--accent-solid); }
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; margin-top: -5px;
+  border-radius: var(--radius-full); border: 0;
+  background: var(--text-primary);
+  transition: scale var(--dur-instant) var(--ease-standard);
+}
+.range::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: var(--radius-full); background: var(--text-primary); }
+.range:hover::-webkit-slider-thumb { scale: 1.15; }
+
+/* 曲がないときの案内 */
+.stage-empty {
+  position: fixed; inset: 0; z-index: 5;
+  /* 中央の CD に重ならないよう、上寄せにする */
+  display: grid; place-items: start center;
+  padding: max(var(--space-8), 8vh) var(--space-4) var(--space-4);
+  pointer-events: none;
+}
+.stage-empty .td-empty {
+  pointer-events: auto;
+  max-width: 26em;
+  background: color-mix(in oklab, var(--bg-surface) 84%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--shape-panel);
+  padding: var(--space-6);
+}
+.stage-empty .td-empty svg { width: 32px; height: 32px; }
+.stage-empty[hidden] { display: none; }
+
+/* ドロップ中の案内 */
+.drop-hint {
+  position: fixed; inset: var(--space-4); z-index: 30;
+  display: grid; place-items: center;
+  border: 2px dashed var(--accent-text);
+  border-radius: var(--shape-panel);
+  background: color-mix(in oklab, var(--bg-canvas) 50%, transparent);
+  pointer-events: none;
+}
+.drop-hint p { margin: 0; font-size: var(--text-lg); font-weight: var(--weight-medium); }
+.drop-hint[hidden] { display: none; }
+
+/* 再生リスト */
+.playlist {
+  position: fixed; z-index: 20;
+  /* 曲数に合わせた高さにし、バーの上に載せる */
+  right: max(var(--space-4), env(safe-area-inset-right, 0px));
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px) + 136px);
+  max-height: calc(100dvh - 136px - var(--space-8) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  width: min(360px, calc(100% - var(--space-8)));
+  display: flex; flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--shape-panel);
+  box-shadow: var(--shadow-md);
+  animation: td-enter var(--dur-base) var(--ease-standard) both;
+}
+.playlist[hidden] { display: none; }
+.playlist-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.playlist-head h2 { font-size: var(--text-md); }
+.playlist-items { list-style: none; margin: 0; padding: var(--space-1); overflow-y: auto; flex: 1; }
+.playlist-items li { display: flex; align-items: center; gap: var(--space-1); }
+.track {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: 0 var(--space-3);
+  border: 0; border-radius: var(--radius-md);
+  background: transparent; color: var(--text-primary);
+  font: inherit; text-align: left; cursor: pointer;
+  transition: background-color var(--dur-instant) var(--ease-standard);
+}
+.track:hover { background: var(--bg-subtle); }
+.track[aria-current="true"] { background: var(--accent-tint); color: var(--accent-text); font-weight: var(--weight-medium); }
+.track-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-no { font-size: var(--text-xs); color: var(--text-secondary); min-width: 1.5em; }
+.playlist-items .td-btn svg { width: 16px; height: 16px; }
+.playlist-empty { padding: var(--space-4); color: var(--text-secondary); font-size: var(--text-sm); }
+
+.gl-error {
+  position: fixed; inset: auto var(--space-4) 50% var(--space-4); z-index: 40;
+  max-width: var(--measure); margin: 0 auto;
+  padding: var(--space-4);
+  background: var(--error-tint); color: var(--error-text);
+  border-radius: var(--shape-control);
+}
+
+@media (max-width: 600px) {
+  .volume { display: none; }
+  .bar-row { flex-wrap: wrap; }
+  .now { flex-basis: 100%; order: -1; }
+  .transport { flex: 1; justify-content: center; }
+  .playlist { bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px) + 176px); }
+}
