@@ -499,11 +499,14 @@
         ? await md.getDisplayMedia({ video: true, audio: RAW, selfBrowserSurface: 'exclude', surfaceSwitching: 'include', systemAudio: 'include' })
         : await md.getUserMedia({ audio: RAW });
     } catch (e) {
-      // 共有の画面でキャンセルしたときは、何も言わない
-      if (kind === 'tab' && e.name === 'NotAllowedError') return;
-      toast(kind === 'mic' && e.name === 'NotAllowedError'
+      const denied = e.name === 'NotAllowedError';
+      // 共有の画面で自分でキャンセルしたときは、何も言わない(Chrome は "by user"、Safari は "user denied")
+      if (kind === 'tab' && denied && /user/i.test(e.message)) return;
+      toast(kind === 'mic' && denied
         ? 'マイクを使えませんでした。アドレス欄の左にある設定から、マイクを許可してください。'
-        : '音を受け取れませんでした。ページを開き直してから、もう一度お試しください。');
+        : denied
+          ? 'タブの共有がブラウザの設定で止められています。Mac ではシステム設定の「画面収録」でブラウザを許可してから、もう一度お試しください。'
+          : '音を受け取れませんでした。ページを開き直してから、もう一度お試しください。(' + e.name + ')');
       return;
     }
     // 画面の映像は使わない。音だけを残す
