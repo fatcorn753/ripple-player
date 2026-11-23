@@ -98,6 +98,13 @@ body[data-idle] #water { cursor: none; }
 }
 .stage-empty .td-empty svg { width: 32px; height: 32px; }
 .stage-empty[hidden] { display: none; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+.empty-actions [hidden] { display: none; }
+
+/* タブやマイクの音を使っている間は、再生位置がないのでシークを隠す */
+.bar[data-live] .seek-row { display: none; }
+.bar [data-action="live"][hidden] { display: none; }
+.bar [data-action="live"][aria-pressed="true"] { color: var(--accent-text); background: var(--accent-tint); }
 
 /* ドロップ中の案内 */
 .drop-hint {

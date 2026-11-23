@@ -14,10 +14,14 @@
   const playlist = $('#playlist');
   const listBtn = $('#list-btn');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const bar = $('#bar');
 
   /** @type {{name:string, url:string}[]} */
   let tracks = [];
   let index = -1;
+  /** タブやマイクの音を使っている間だけ入る @type {{kind:'tab'|'mic', stream:MediaStream}|null} */
+  let live = null;
+  const isOn = () => !!live || !audio.paused;
 
   // ---------- 水面 ----------
   let water = null;
@@ -60,7 +64,7 @@
   function drive(now) {
     const t = now / 1000;
     const a = analyzer.update(t);
-    const playing = !audio.paused;
+    const playing = isOn();
     // 「視差効果を減らす」設定では波を穏やかにする
     const gain = reduceMotion.matches ? 0.45 : 1;
     const R = cd.radius;
@@ -201,7 +205,7 @@
 
   function renderList() {
     // 曲の追加や削除で番号が変わるので、ここでまとめて更新する
-    if (index >= 0) $('#now-sub').textContent = (index + 1) + ' / ' + tracks.length + ' 曲目';
+    if (index >= 0 && !live) $('#now-sub').textContent = (index + 1) + ' / ' + tracks.length + ' 曲目';
     listEl.replaceChildren();
     if (!tracks.length) {
       const p = document.createElement('li');
@@ -239,7 +243,9 @@
     const wasCurrent = i === index;
     if (i < index) index--;
     if (wasCurrent) {
-      if (tracks.length) load(Math.min(i, tracks.length - 1), !audio.paused);
+      // タブやマイクの音を使っている間は、それを止めずに次の曲を選んでおくだけにする
+      if (live) index = tracks.length ? Math.min(i, tracks.length - 1) : -1;
+      else if (tracks.length) load(Math.min(i, tracks.length - 1), !audio.paused);
       else stop();
     }
     renderList();
@@ -249,8 +255,9 @@
         tracks.splice(i, 0, tr);
         // 戻した位置より後ろにある再生中の曲は、番号が 1 つずれる
         if (index >= i) index++;
-        if (index < 0) load(i, false);
-        $('#empty').hidden = true;
+        if (index < 0 && live) index = i;
+        else if (index < 0) load(i, false);
+        if (!live) $('#empty').hidden = true;
         renderList();
       },
     });
@@ -270,6 +277,7 @@
 
   function load(i, autoplay) {
     if (!tracks[i]) return;
+    stopLive();
     index = i;
     audio.src = tracks[i].url;
     if (analyzer.ctx) analyzer.reset();
@@ -281,6 +289,7 @@
   }
 
   function play() {
+    stopLive();
     if (index < 0) {
       if (tracks.length) load(0, false);
       else return fileInput.click();
@@ -290,7 +299,7 @@
   }
 
   function step(d) {
-    if (!tracks.length) return;
+    if (!tracks.length || live) return;
     // 3 秒以上進んでいれば、「前」は曲の頭に戻す
     if (d < 0 && audio.currentTime > 3) {
       audio.currentTime = 0;
@@ -312,9 +321,10 @@
   let seeking = false;
 
   function syncPlay() {
-    const on = !audio.paused;
+    const on = isOn();
     playBtn.setAttribute('aria-pressed', String(on));
-    playBtn.setAttribute('aria-label', on ? '一時停止' : '再生');
+    playBtn.setAttribute('aria-label', live ? LIVE[live.kind].stop : on ? '一時停止' : '再生');
+    for (const b of document.querySelectorAll('.bar [data-action="live"]')) b.setAttribute('aria-pressed', String(!!live));
     if (!on) document.body.removeAttribute('data-idle');
     else poke();
   }
@@ -363,7 +373,8 @@
     if (!b) return;
     const act = b.dataset.action;
     if (act === 'open') fileInput.click();
-    else if (act === 'play') audio.paused ? play() : audio.pause();
+    else if (act === 'play') togglePlay();
+    else if (act === 'live') live ? stopLive() : startLive(liveKind);
     else if (act === 'prev') step(-1);
     else if (act === 'next') step(1);
     else if (act === 'list') toggleList();
@@ -391,8 +402,9 @@
     }
     if (e.key === ' ') {
       e.preventDefault();
-      audio.paused ? play() : audio.pause();
-    } else if (e.key === 'ArrowRight' && index >= 0) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5);
+      togglePlay();
+    } else if (live) return;
+    else if (e.key === 'ArrowRight' && index >= 0) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5);
     else if (e.key === 'ArrowLeft' && index >= 0) audio.currentTime = Math.max(0, audio.currentTime - 5);
     else if (e.key === 'n' || e.key === 'N') step(1);
     else if (e.key === 'p' || e.key === 'P') step(-1);
@@ -435,10 +447,112 @@
     document.body.removeAttribute('data-idle');
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (!audio.paused && playlist.hidden) document.body.setAttribute('data-idle', '');
+      if (isOn() && playlist.hidden) document.body.setAttribute('data-idle', '');
     }, 3000);
   }
   for (const ev of ['pointermove', 'pointerdown', 'keydown']) addEventListener(ev, poke, { passive: true });
+
+  // ---------- タブやマイクの音 ----------
+  // ファイルを選ばなくても、YouTube などを別のタブで流してその音に合わせられる。
+  // 別サイトの埋め込みや配信サービスの音は中身を読めないため、ブラウザの「タブの共有」で音だけをもらう。
+  // タブの共有がない端末(スマホ)では、代わりにマイクで流れている音を拾う
+  const LIVE = {
+    tab: {
+      title: '共有したタブの音',
+      sub: 'タブの音を共有中',
+      stop: 'タブの音の共有を止める',
+      button: 'ほかのタブの音を使う',
+      hint: 'YouTube などを別のタブで流し、そのタブの音に合わせることもできます。',
+    },
+    mic: {
+      title: 'マイクの音',
+      sub: 'マイクで聞き取り中',
+      stop: 'マイクを止める',
+      button: 'マイクで音を拾う',
+      hint: 'ほかのアプリで流している音を、マイクで拾って合わせることもできます。',
+    },
+  };
+  const md = navigator.mediaDevices;
+  const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile
+    : /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+  const canTab = !!md?.getDisplayMedia && !uaMobile;
+  const canMic = !!md?.getUserMedia;
+  const liveKind = canTab ? 'tab' : canMic ? 'mic' : null;
+  if (liveKind) {
+    document.querySelector('.bar [data-kind="' + liveKind + '"]').hidden = false;
+    const eb = $('#live-empty');
+    eb.textContent = LIVE[liveKind].button;
+    eb.hidden = false;
+    const hint = $('#live-hint');
+    hint.textContent = LIVE[liveKind].hint;
+    hint.hidden = false;
+  }
+
+  // 声向けの加工(エコー除去・雑音除去・自動音量)は音楽の強弱を消すので切る
+  const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+
+  async function startLive(kind) {
+    if (!kind) return;
+    let stream;
+    try {
+      stream = kind === 'tab'
+        ? await md.getDisplayMedia({ video: true, audio: RAW, selfBrowserSurface: 'exclude', surfaceSwitching: 'include', systemAudio: 'include' })
+        : await md.getUserMedia({ audio: RAW });
+    } catch (e) {
+      // 共有の画面でキャンセルしたときは、何も言わない
+      if (kind === 'tab' && e.name === 'NotAllowedError') return;
+      toast(kind === 'mic' && e.name === 'NotAllowedError'
+        ? 'マイクを使えませんでした。アドレス欄の左にある設定から、マイクを許可してください。'
+        : '音を受け取れませんでした。ページを開き直してから、もう一度お試しください。');
+      return;
+    }
+    // 画面の映像は使わない。音だけを残す
+    for (const t of stream.getVideoTracks()) t.stop();
+    const track = stream.getAudioTracks()[0];
+    if (!track) {
+      for (const t of stream.getTracks()) t.stop();
+      toast('音を受け取れませんでした。共有の画面で「タブ」を選び、「タブの音声も共有する」をオンにしてください。',
+        canMic ? { actionLabel: 'マイクを使う', onAction: () => startLive('mic') } : {});
+      return;
+    }
+    audio.pause();
+    stopLive();
+    analyzer.useStream(stream);
+    live = { kind, stream };
+    // ブラウザの「共有を停止」で止められたときも、元に戻す
+    track.addEventListener('ended', () => { if (live?.stream === stream) stopLive(); });
+    bar.dataset.live = '';
+    $('#empty').hidden = true;
+    $('#now-title').textContent = LIVE[kind].title;
+    $('#now-sub').textContent = LIVE[kind].sub;
+    document.title = LIVE[kind].title + ' — 波紋プレーヤー';
+    syncPlay();
+  }
+
+  function stopLive() {
+    if (!live) return;
+    for (const t of live.stream.getTracks()) t.stop();
+    live = null;
+    analyzer.stopStream();
+    delete bar.dataset.live;
+    if (index >= 0) {
+      $('#now-title').textContent = tracks[index].name;
+      document.title = tracks[index].name + ' — 波紋プレーヤー';
+    } else {
+      $('#now-title').textContent = '曲が選ばれていません';
+      $('#now-sub').textContent = 'ファイルを選ぶと再生できます';
+      document.title = '波紋プレーヤー';
+      $('#empty').hidden = tracks.length > 0;
+    }
+    renderList();
+    syncPlay();
+  }
+
+  function togglePlay() {
+    if (live) stopLive();
+    else if (audio.paused) play();
+    else audio.pause();
+  }
 
   // ---------- トースト(components.md の実装) ----------
   function toast(message, { actionLabel, onAction } = {}) {

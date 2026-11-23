@@ -17,12 +17,19 @@
       if (!this.ctx) {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Ctx();
-        const src = this.ctx.createMediaElementSource(this.el);
+        this.fileSrc = this.ctx.createMediaElementSource(this.el);
         this.node = this.ctx.createAnalyser();
         this.node.fftSize = 2048;
         this.node.smoothingTimeConstant = 0.35;
-        src.connect(this.node);
-        this.node.connect(this.ctx.destination);
+        // 解析器はスピーカーにつながない。タブやマイクの音を入れたとき、同じ音がもう一度鳴らないようにする。
+        // ただし出口がないと解析しないブラウザがあるので、音量 0 の経路で出口につないでおく
+        const mute = this.ctx.createGain();
+        mute.gain.value = 0;
+        this.node.connect(mute);
+        mute.connect(this.ctx.destination);
+        this.fileSrc.connect(this.ctx.destination);
+        this.fileSrc.connect(this.node);
+        this.streamSrc = null;
         this.bins = new Uint8Array(this.node.frequencyBinCount);
         this.prev = new Float32Array(this.node.frequencyBinCount);
         this.hist = { bass: [], high: [] };
@@ -30,6 +37,29 @@
         this.levels = { bass: 0, mid: 0, high: 0 };
       }
       if (this.ctx.state === 'suspended') this.ctx.resume();
+    }
+
+    /**
+     * タブやマイクの音を解析する。その間はファイルの音を解析から外す
+     * @param {MediaStream} stream
+     */
+    useStream(stream) {
+      this.ensure();
+      this.stopStream();
+      this.fileSrc.disconnect(this.node);
+      this.streamSrc = this.ctx.createMediaStreamSource(stream);
+      this.streamSrc.connect(this.node);
+      // マイクやタブの音は、ファイルより音量の幅が読めないので、低めの基準から合わせていく
+      this.reset(0.3);
+    }
+
+    /** ファイルの音の解析に戻す */
+    stopStream() {
+      if (!this.streamSrc) return;
+      this.streamSrc.disconnect();
+      this.streamSrc = null;
+      this.fileSrc.connect(this.node);
+      this.reset();
     }
 
     /** 周波数(Hz)を FFT の bin 番号に変える */
@@ -59,10 +89,10 @@
     }
 
     /** 曲が変わったら、盛り上がりの基準を作り直す */
-    reset() {
+    reset(peak = 0.6) {
       // 最初から静かな曲でも全開にならないよう、基準はやや大きめの値から始めて曲に合わせて下げていく
       this.loud = 0;
-      this.peakLoud = 0.6;
+      this.peakLoud = peak;
       this.peakFlux = 0.8;
     }
 
