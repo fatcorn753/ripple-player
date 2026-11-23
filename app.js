@@ -30,11 +30,14 @@
   }
   const analyzer = new Analyzer(audio);
 
-  const cd = { x: 0, y: 0, radius: 0, rotation: 0, speed: 0, bob: 0, glow: 0, kick: 0, damp: 0.995 };
+  const cd = { x: 0, y: 0, radius: 0, rotation: 0, speed: 0, bob: 0, kick: 0, damp: 0.995, time: 0, wind: 1, mood: 0, flash: 0 };
+
+  // 重い端末では、描画の解像度を下げる(画質を自動で落とす仕組みが変える)
+  let dprScale = 1;
 
   function resize() {
     if (!water) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2) * dprScale;
     water.resize(innerWidth, innerHeight, dpr);
     const [w, h] = water.size;
     cd.x = w / 2;
@@ -70,8 +73,10 @@
       if (a.beat) {
         const s = a.accent;
         // 拍: CD が沈み込むように、縁のすぐ外を押し下げる。強い拍ほど深く、波長の長いうねりにする
-        water.addDrop(cd.x, cd.y, R * 1.1, -(0.25 + 1.7 * s * s) * e * gain, 1.8 + 4.5 * s * I);
+        // 幅を負にすると、山と谷が 1 組の鋭い輪になり、ほかの細かい波と見分けやすい
+        water.addDrop(cd.x, cd.y, R * 1.1, -(0.25 + 1.7 * s * s) * e * gain, -(1.8 + 4.5 * s * I));
         cd.kick = Math.max(cd.kick, s * e);
+        cd.flash = Math.max(cd.flash, s * s * I);
         // 山場の強い拍では、CD の周りにしぶきを散らす
         if (s > 0.8 && I > 0.65) {
           for (let k = 0; k < 7; k++) {
@@ -110,10 +115,34 @@
     // 強い拍で CD が一瞬沈み、すぐ戻る
     cd.kick *= Math.exp(-dt * 7);
     cd.bob = playing ? (a.bass * 0.006 + cd.kick * 0.035) * gain : 0;
-    cd.glow += ((playing ? I : 0) - cd.glow) * 0.05;
+    // 照明の色は曲の展開に合わせてゆっくり変える。強い拍では水中の光が一瞬強まる
+    cd.mood += ((playing ? I : 0) - cd.mood) * Math.min(dt * 0.8, 1);
+    cd.flash *= Math.exp(-dt * 5);
+    cd.time += dt;
+    cd.wind = (0.7 + 0.5 * cd.mood) * gain;
     // 静かな所では水が早く落ち着き、山場では波が長く残る
     cd.damp = 0.990 + 0.0055 * I;
     return dt;
+  }
+
+  // 2 秒ごとに平均のフレーム時間を見て、遅ければ画質を 1 段ずつ下げる。
+  // 1 段目: 光の色のにじみとブルームを省く。2 段目以降: 描画の解像度を下げる(波は作り直しで消える)
+  let slowSum = 0;
+  let slowN = 0;
+  function watchSpeed(dt) {
+    if (dt <= 0 || dt > 0.25) return;
+    slowSum += dt;
+    slowN++;
+    if (slowSum < 2) return;
+    const avg = slowSum / slowN;
+    slowSum = 0;
+    slowN = 0;
+    if (avg < 1 / 40) return;
+    if (water.quality === 'high') water.quality = 'low';
+    else if (dprScale > 0.5) {
+      dprScale = Math.max(0.5, dprScale * 0.75);
+      resize();
+    }
   }
 
   function frame(now) {
@@ -121,6 +150,7 @@
       const dt = drive(now);
       water.step(dt, cd);
       water.draw(cd);
+      watchSpeed(dt);
     }
     last = now;
     requestAnimationFrame(frame);
