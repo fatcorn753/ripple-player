@@ -409,7 +409,7 @@ void main() {
       gl.uniform2f(s.u.uCenter, cd.x, cd.y);
       gl.uniform1f(s.u.uRadius, cd.radius);
       gl.uniform1f(s.u.uC2, 0.42);
-      gl.uniform1f(s.u.uDamp, 0.995);
+      gl.uniform1f(s.u.uDamp, cd.damp ?? 0.995);
       while (this.acc >= STEP) {
         this.swapDraw(s);
         this.acc -= STEP;

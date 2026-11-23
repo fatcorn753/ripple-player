@@ -30,7 +30,7 @@
   }
   const analyzer = new Analyzer(audio);
 
-  const cd = { x: 0, y: 0, radius: 0, rotation: 0, speed: 0, bob: 0, glow: 0 };
+  const cd = { x: 0, y: 0, radius: 0, rotation: 0, speed: 0, bob: 0, glow: 0, kick: 0, damp: 0.995 };
 
   function resize() {
     if (!water) return;
@@ -62,21 +62,37 @@
     const gain = reduceMotion.matches ? 0.45 : 1;
     const R = cd.radius;
 
+    // 盛り上がり(0〜1)の二乗で効かせ、静かな所はより静かにする
+    const I = playing ? a.intensity : 0;
+    const e = 0.12 + 0.88 * I * I;
+
     if (playing) {
-      // 拍: CD が沈み込むように、縁のすぐ外を押し下げる
-      if (a.beat) water.addDrop(cd.x, cd.y, R * 1.1, -1.0 * Math.min(a.beat, 2) * gain, 3.0);
-      // 拍のあいだも、低音の膨らみに合わせて細かな波を出し続ける
+      if (a.beat) {
+        const s = a.accent;
+        // 拍: CD が沈み込むように、縁のすぐ外を押し下げる。強い拍ほど深く、波長の長いうねりにする
+        water.addDrop(cd.x, cd.y, R * 1.1, -(0.25 + 1.7 * s * s) * e * gain, 1.8 + 4.5 * s * I);
+        cd.kick = Math.max(cd.kick, s * e);
+        // 山場の強い拍では、CD の周りにしぶきを散らす
+        if (s > 0.8 && I > 0.65) {
+          for (let k = 0; k < 7; k++) {
+            const th = Math.random() * Math.PI * 2;
+            const rr = R * (1.25 + Math.random() * 0.7);
+            water.addDrop(cd.x + Math.cos(th) * rr, cd.y + Math.sin(th) * rr, 0, 0.45 * gain, 1.3 + Math.random());
+          }
+        }
+      }
+      // 拍のあいだの細かな波は、盛り上がっているときだけ出す
       const rise = a.bass - prevBass;
-      if (rise > 0.004) water.addDrop(cd.x, cd.y, R * 1.08, -Math.min(rise * 4, 0.15) * gain, 2.6);
-      // 高音の粒立ちは、水面のあちこちに落ちる小さなしずくにする
-      if (a.hat && Math.random() < 0.5) {
+      if (rise > 0.004 && I > 0.3) water.addDrop(cd.x, cd.y, R * 1.08, -Math.min(rise * 4, 0.15) * I * I * gain, 2.4);
+      // 高音の粒立ちは、水面のあちこちに落ちる小さなしずくにする。数と大きさも盛り上がりで変える
+      if (a.hat && Math.random() < 0.1 + 0.6 * I) {
         const [w, h] = water.size;
         let x, y;
         do {
           x = Math.random() * w;
           y = Math.random() * h;
         } while (Math.hypot(x - cd.x, y - cd.y) < R * 1.4);
-        water.addDrop(x, y, 0, 0.12 * a.hat * gain, 1.3);
+        water.addDrop(x, y, 0, 0.12 * a.hat * (0.3 + 0.7 * I) * gain, 1.3);
       }
     } else if (t > ambientAt) {
       // 止まっている間も、ときどき小さなしずくを落として水だと分かるようにする
@@ -91,8 +107,12 @@
     const dt = Math.min((now - last) / 1000, 0.1);
     cd.speed += (target - cd.speed) * Math.min(dt * 1.5, 1);
     cd.rotation = (cd.rotation + cd.speed * dt) % (Math.PI * 200);
-    cd.bob = playing ? a.bass * 0.018 * gain : 0;
-    cd.glow += ((playing ? a.mid : 0) - cd.glow) * 0.1;
+    // 強い拍で CD が一瞬沈み、すぐ戻る
+    cd.kick *= Math.exp(-dt * 7);
+    cd.bob = playing ? (a.bass * 0.006 + cd.kick * 0.035) * gain : 0;
+    cd.glow += ((playing ? I : 0) - cd.glow) * 0.05;
+    // 静かな所では水が早く落ち着き、山場では波が長く残る
+    cd.damp = 0.990 + 0.0055 * I;
     return dt;
   }
 
@@ -222,6 +242,7 @@
     if (!tracks[i]) return;
     index = i;
     audio.src = tracks[i].url;
+    if (analyzer.ctx) analyzer.reset();
     $('#now-title').textContent = tracks[i].name;
     document.title = tracks[i].name + ' — 波紋プレーヤー';
     if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: tracks[i].name });
