@@ -38,13 +38,17 @@ void main() {
   float edges = H(vec2(1.0, 0.0)) + H(vec2(-1.0, 0.0)) + H(vec2(0.0, 1.0)) + H(vec2(0.0, -1.0));
   float corners = H(vec2(1.0, 1.0)) + H(vec2(-1.0, 1.0)) + H(vec2(1.0, -1.0)) + H(vec2(-1.0, -1.0));
   float lap = (4.0 * edges + corners - 20.0 * h) / 6.0;
-  // 画面の縁の近くは波を吸い込ませる。四角い縁で跳ね返った波が、四角い模様になって残るのを防ぐ
+  // 波を跳ね返さないよう、画面の縁と CD の下を「吸い込む層」にする。
+  // 吸い込みの強さを急に変えると、その境目でも波が跳ね返るので、二乗でゆっくり強める
   vec2 p = vUv * uSize;
   float edge = min(min(p.x, uSize.x - p.x), min(p.y, uSize.y - p.y));
-  float damp = uDamp * mix(0.93, 1.0, smoothstep(0.0, 28.0, edge));
-  float hn = h + (h - hp) * damp + uC2 * lap;
-  // CD の下は固定端にする。外へ出た波の一部が CD の縁で跳ね返る
-  if (distance(p, uCenter) < uRadius * 0.96) hn = 0.0;
+  float band = min(uSize.x, uSize.y) * 0.14;
+  float xe = 1.0 - clamp(edge / band, 0.0, 1.0);
+  float xc = 1.0 - clamp((distance(p, uCenter) - uRadius * 0.45) / (uRadius * 0.55), 0.0, 1.0);
+  float x = max(xe, xc);
+  float absorb = x * x;
+  float hn = h + (h - hp) * uDamp * (1.0 - 0.10 * absorb) + uC2 * lap;
+  hn *= 1.0 - 0.03 * absorb;
   o = vec4(hn, h, 0.0, 1.0);
 }`;
 
