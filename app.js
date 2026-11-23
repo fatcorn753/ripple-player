@@ -158,17 +158,22 @@
   }
 
   // ---------- 音から花火へ ----------
-  // 曲を先に解析できたときは、拍の 1.25 秒前に打ち上げ、ちょうど拍で開くようにする。
+  // 曲を先に解析できたときは、曲のテンポの拍(ビートグリッド)に合わせて打ち上げ、ちょうど拍で開くようにする。
+  // 盛り上がるほど打つ拍を増やす: 静か = 小節の頭だけ、中 = 2 拍ごと、山場 = 毎拍 + 裏拍にスターマイン。
+  // 小節の頭は大きく、ほかの拍は小さく、区切り(8 小節ごとや急に盛り上がった所)では大きな花火を並べて上げる。
   // 解析できないとき(タブやマイクの音、解析中)は、拍を聞いてからすぐ開く
   const RISE = 1.25;
   const MINLEAD = 0.35;
   let schedMap = null;
   let schedIdx = 0;
   let lastVt = -1;
-  let lastFire = -1e9;
+  let lastPhraseBar = -99;
+  let liveBeats = 0;
   let lastLiveFire = 0;
   let fwIdleAt = 0;
   let fwMood = 0;
+  /** 裏拍のスターマインを、その時刻が来たら打つための予定 */
+  const fanQueue = [];
 
   // 画面に音が届くまでの遅れ。この分だけ遅らせた曲の時刻に合わせて開く
   function visualTime() {
@@ -177,14 +182,45 @@
     return audio.currentTime - lat;
   }
 
-  function firstOnset(onsets, t) {
-    let lo = 0, hi = onsets.length;
+  function firstBeat(beats, t) {
+    let lo = 0, hi = beats.length;
     while (lo < hi) {
       const m = (lo + hi) >> 1;
-      if (onsets[m].t < t) lo = m + 1;
+      if (beats[m].t < t) lo = m + 1;
       else hi = m;
     }
     return lo;
+  }
+
+  // 打つ拍の数を決める盛り上がりは、前後 1 小節の平均にする(拍ごとに揺れて、打つ・打たないが乱れないように)
+  function envBar(map, t) {
+    const bar = 4 * 60 / map.bpm;
+    let s = 0;
+    for (let k = -4; k <= 4; k++) s += envAt(map, t + bar * k / 4);
+    return s / 9;
+  }
+
+  /** 拍 1 つぶんの打ち上げを決める。lead は開くまでの秒数 */
+  function fireBeat(map, i, lead) {
+    const bt = map.beats[i];
+    const I = envBar(map, bt.t);
+    // 無音の所には上げない
+    if (I < 0.02 && bt.s < 0.2) return;
+    const head = bt.pos === 0;
+    // 区切り: 8 小節ごとの頭か、2 小節前より急に盛り上がった小節の頭
+    const jump = I - envBar(map, bt.t - 8 * 60 / map.bpm);
+    if (head && I > 0.5 && bt.bar - lastPhraseBar >= 4 && (bt.bar % 8 === 0 || jump > 0.3)) {
+      lastPhraseBar = bt.bar;
+      fw.launch(fw.design('phrase', 1, I), lead);
+    } else if (head) {
+      fw.launch(fw.design('bar', bt.s, I), lead);
+    } else if (I >= 0.75 || (I >= 0.4 && bt.pos === 2)) {
+      fw.launch(fw.design('beat', bt.s, I), lead);
+    }
+    // 山場では、裏拍に湖上からスターマインを打つ(上がる時間がほぼないので、その時刻に出す)
+    if (I >= 0.8 && bt.off > 0.25 && map.beats[i + 1]) {
+      fanQueue.push({ t: (bt.t + map.beats[i + 1].t) / 2 - 0.15, n: Math.round(5 + 4 * I), I });
+    }
   }
 
   function fwDrive(now, dt) {
@@ -196,34 +232,39 @@
     fwMood += (I - fwMood) * Math.min(dt * 0.8, 1);
     fw.wind = (0.5 + 0.7 * fwMood) * (fw.calm ? 0.5 : 1);
     const tr = !live && index >= 0 ? tracks[index] : null;
-    const map = tr && tr.map;
+    const map = tr && tr.map && tr.map.beats.length ? tr.map : null;
 
     if (playing && map) {
       const vt = visualTime();
       // 曲が変わった・解析が届いた・頭出しした ときは、予定を今の位置から組み直す
       if (map !== schedMap || vt < lastVt - 0.05 || vt > lastVt + 0.8) {
         schedMap = map;
-        schedIdx = firstOnset(map.onsets, vt + MINLEAD);
-        lastFire = -1e9;
+        schedIdx = firstBeat(map.beats, vt + MINLEAD);
+        fanQueue.length = 0;
+        lastPhraseBar = -99;
+        fw.clearShells();
       }
       lastVt = vt;
-      while (schedIdx < map.onsets.length && map.onsets[schedIdx].t <= vt + RISE) {
-        const o = map.onsets[schedIdx++];
-        const Io = envAt(map, o.t);
-        // 静かな所では間を空け、山場では拍ごとに上げる。特に強い拍は必ず上げる
-        if (o.t - lastFire < 0.95 - 0.7 * Io && o.s < 0.85) continue;
-        lastFire = o.t;
-        fw.launch(fw.design(o.s, Io), o.t - vt);
+      while (schedIdx < map.beats.length && map.beats[schedIdx].t <= vt + RISE) {
+        fireBeat(map, schedIdx, map.beats[schedIdx].t - vt);
+        schedIdx++;
       }
-    } else if (playing && a.beat && t - lastLiveFire > 0.95 - 0.7 * I) {
+      while (fanQueue.length && fanQueue[0].t <= vt) {
+        const f = fanQueue.shift();
+        if (f.t > vt - 0.2) fw.fan(f.n, f.I);
+      }
+    } else if (playing && a.beat && t - lastLiveFire > 0.25) {
+      // 先が分からないので、聞こえた拍を 4 つずつ数え、1 つ目を大きくする
       lastLiveFire = t;
-      fw.launch(fw.design(a.accent, I), 0);
+      const head = liveBeats++ % 4 === 0;
+      if (head) fw.launch(fw.design('bar', a.accent, I), 0);
+      else if (I >= 0.75 || (I >= 0.4 && liveBeats % 2 === 1)) fw.launch(fw.design('beat', a.accent, I), 0);
     }
     // 高音の粒立ちは、燃えている星のはじける音にする
     if (playing && a.hat && !fw.calm) fw.crackle(Math.round(2 + 8 * a.hat * I));
     // 止まっている間も、ときどき小さな花火を上げる
     if (!playing && t > fwIdleAt) {
-      fw.launch(fw.design(0.2, 0.15), 1.4);
+      fw.launch(fw.design('beat', 0.3, 0.15), 1.4);
       fwIdleAt = t + 3 + Math.random() * 4;
     }
   }

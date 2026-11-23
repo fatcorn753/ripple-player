@@ -18,7 +18,9 @@
   const X = 0, Y = 1, Z = 2, VX = 3, VY = 4, VZ = 5, AGE = 6, LIFE = 7;
   const R1 = 8, G1 = 9, B1 = 10, R2 = 11, G2 = 12, B2 = 13, SW = 14;
   const SIZE = 15, STREAK = 16, FLICK = 17, DRAG = 18, GRAV = 19, EMIT = 20, EKIND = 21, ACC = 22, BRIGHT = 23;
-  const NF = 24;
+  // DIE: 燃え尽きたとき 1 = 4 つに割れる、2 = 小さな花になる。DP はそのときの速さ
+  const DIE = 24, DP = 25;
+  const NF = 26;
   const STRIDE = 12;
   // 手前の湖面で波を計算する範囲(m)。x の最小・z の最小・幅・奥行き
   const LAKE = [-40, 3, 80, 80];
@@ -399,20 +401,35 @@ void main() {
       P[b + EKIND] = o.ekind ?? 0;
       P[b + ACC] = Math.random();
       P[b + BRIGHT] = o.bright ?? 3;
+      P[b + DIE] = o.die ?? 0;
+      P[b + DP] = o.dp ?? 0;
     }
 
     /**
-     * 拍の強さと曲の盛り上がりから、花火の種類・大きさ・色を決める
+     * 花火の種類・大きさ・色を決める
+     * @param {'phrase'|'bar'|'beat'} role 曲の区切りの頭(大きな花火を何発も)、小節の頭(中〜大)、そのほかの拍(小)
      * @param {number} s 拍の強さ(0〜1)
      * @param {number} I 盛り上がり(0〜1)
      */
-    design(s, I) {
-      let type;
-      if (I < 0.3) type = s > 0.75 ? 'willow' : weighted({ peony: 3, chrys: 2 });
-      else if (I < 0.7) type = weighted({ peony: 3, chrys: 3, ring: 1, strobe: 1, willow: 1 });
-      else type = weighted({ chrys: 3, kamuro: 2, peony: 2, ring: 1, strobe: 1 });
-      const big = s * 0.6 + I * 0.4;
+    design(role, s, I) {
       const pal = I < 0.4 ? COOL : WARM;
+      let type;
+      let R;
+      let multi = 1;
+      if (role === 'phrase') {
+        type = weighted({ kamuro: 3, chrys: 2, senrin: 2, saturn: 2, dahlia: 1, willow: 1 });
+        R = rnd(140, 180);
+        multi = 3;
+      } else if (role === 'bar') {
+        type = I < 0.3
+          ? weighted({ willow: 2, peony: 2, chrys: 2, dahlia: 1, palm: 1 })
+          : weighted({ peony: 3, chrys: 3, crossette: 2, kamuro: 1, saturn: 1, ring: 1, palm: 1, senrin: 1, willow: 1 });
+        R = rnd(65, 95) + 45 * I * s;
+        if (I > 0.75 && s > 0.6) multi = 2;
+      } else {
+        type = weighted({ peony: 4, strobe: 2, ring: 1, crossette: 1, dahlia: 1, chrys: 1 });
+        R = rnd(26, 42) + 22 * s * I;
+      }
       const c1 = PAL[pick(pal)];
       let c2 = null;
       // 途中で色が変わる星(変色)と、内側にもう一回り小さい球(芯)。日本の割物らしさを出す
@@ -420,9 +437,8 @@ void main() {
         c2 = PAL[pick(pal)];
         if (c2 === c1) c2 = null;
       }
-      const pistil = (type === 'peony' || type === 'chrys') && Math.random() < 0.55 ? PAL[pick(pal)] : null;
-      const multi = I > 0.8 && s > 0.7 ? 3 : I > 0.6 && s > 0.85 ? 2 : 1;
-      return { type, R: 40 + 75 * big, c1, c2, pistil, multi };
+      const pistil = R > 60 && (type === 'peony' || type === 'chrys') && Math.random() < 0.55 ? PAL[pick(pal)] : null;
+      return { type, R, c1, c2, pistil, multi };
     }
 
     /**
@@ -431,11 +447,12 @@ void main() {
      */
     launch(spec, lead) {
       for (let k = 0; k < spec.multi; k++) {
-        const z = rnd(480, 640);
+        const R = spec.R * (spec.multi > 1 ? 0.85 : 1);
+        // 大きい花火ほど遠く高く開かせ、画面からはみ出さないようにする
+        const z = rnd(470, 560) + R * 1.3;
         const xr = this.xRange(z);
-        const x = spec.multi > 1 ? (k - (spec.multi - 1) / 2) * xr * 0.7 + rnd(-30, 30) : rnd(-xr, xr);
-        const R = spec.R * (spec.multi > 1 ? 0.8 : 1);
-        const h = Math.min(rnd(110, 160) + R * 1.1, this.hMax(z) - R * 0.95);
+        const x = spec.multi > 1 ? (k - (spec.multi - 1) / 2) * xr * 0.75 + rnd(-20, 20) : rnd(-xr, xr);
+        const h = Math.min(rnd(70, 120) + R * 1.25, this.hMax(z) - R * 0.95);
         const one = k === 0 ? spec : { ...spec, c1: PAL[pick(Object.keys(PAL))] };
         if (lead < 0.35) {
           // すぐ開く花火は、上がってきた跡だけを残す
@@ -453,10 +470,27 @@ void main() {
       }
     }
 
+    /** スターマイン: 湖上から、扇形に光の玉を何本も打ち出す(山場の裏拍に使う) */
+    fan(count, I) {
+      const z = rnd(300, 380);
+      const xr = this.xRange(z);
+      const x = rnd(-xr, xr) * 0.85;
+      const c = PAL[pick(I < 0.4 ? COOL : WARM)];
+      const q = this.calm ? 0.6 : 1;
+      for (let i = 0; i < Math.round(count * q); i++) {
+        const a = (count > 1 ? i / (count - 1) - 0.5 : 0) * 1.1 + rnd(-0.05, 0.05);
+        const v = rnd(72, 92);
+        this.spawn(x, 1, z, Math.sin(a) * v, Math.cos(a) * v, rnd(-4, 4), {
+          life: rnd(1.2, 1.5), c1: c, size: 1.4, bright: 2.4, drag: 0.7, grav: 9.8, streak: 0.06, emit: 22, ekind: 2,
+        });
+      }
+      this.spawn(x, 1.5, z, 0, 0, 0, { life: 0.15, c1: c, size: 6, bright: 2.5 });
+    }
+
     burst(spec, x, y, z, R) {
       const q = (this.quality === 'high' ? 1 : 0.6) * (this.calm ? 0.6 : 1);
       const t = spec.type;
-      let n = Math.round((60 + R * 1.5) * q);
+      let n = Math.round((50 + R * 1.6) * q);
       const base = {
         peony: { drag: 1.2, life: 1.7, size: 1.5, streak: 0.04, bright: 2.6 },
         chrys: { drag: 1.3, life: 1.9, size: 1.3, streak: 0.10, bright: 2.4, emit: 14, ekind: 2 },
@@ -464,36 +498,98 @@ void main() {
         kamuro: { drag: 1.9, life: 4.2, size: 1.2, streak: 0.18, bright: 2.2, emit: 24, ekind: 1 },
         ring: { drag: 1.2, life: 1.8, size: 1.5, streak: 0.05, bright: 2.8 },
         strobe: { drag: 1.3, life: 2.2, size: 1.3, streak: 0.03, bright: 2.6, flick: 1 },
+        // 牡丹より星が少なく大きい
+        dahlia: { drag: 1.0, life: 2.1, size: 2.6, streak: 0.07, bright: 2.6 },
+        // ヤシ: 太い光の尾を引く数本の星が、上に開いてから垂れる
+        palm: { drag: 1.3, life: 2.4, size: 2.4, streak: 0.12, bright: 2.8, emit: 30, ekind: 2, grav: 14 },
+        // 分裂: 星が途中で 4 つに割れる
+        crossette: { drag: 1.2, life: 0.75, size: 1.6, streak: 0.05, bright: 2.8, die: 1 },
+        // 千輪: 小さな玉が散ってから、それぞれが小さな花になる
+        senrin: { drag: 1.4, life: 0.95, size: 0.9, streak: 0.06, bright: 1.2, die: 2 },
+        // 土星: 球と、色の違う輪
+        saturn: { drag: 1.2, life: 1.9, size: 1.4, streak: 0.05, bright: 2.6 },
       }[t];
       let c1 = spec.c1;
       let c2 = spec.c2;
       if (t === 'willow') { c1 = PAL.gold; c2 = null; n = Math.round(n * 0.7); }
       if (t === 'kamuro') { c1 = [1, 0.82, 0.55]; c2 = PAL.gold; }
       if (t === 'strobe') { c1 = PAL.silver; c2 = null; }
+      if (t === 'palm') { c2 = PAL.gold; }
+      if (t === 'dahlia') n = Math.round(n * 0.35);
+      if (t === 'crossette') n = Math.round(n * 0.22);
+      if (t === 'senrin') n = Math.round(n * 0.16);
 
-      const dirs = t === 'ring' ? this.ringDirs(Math.round(n * 0.55)) : this.sphereDirs(n);
+      let dirs;
+      if (t === 'ring') dirs = this.ringDirs(Math.round(n * 0.55));
+      else if (t === 'palm') dirs = this.palmDirs(Math.round(rnd(8, 12)));
+      else if (t === 'saturn') dirs = this.sphereDirs(Math.round(n * 0.6));
+      else dirs = this.sphereDirs(n);
+      // 分裂・千輪の星が割れたときの速さ
+      const dp = t === 'crossette' ? R * 0.45 : R * 0.12;
       for (const [dx, dy, dz] of dirs) {
         // 球の形がくずれないよう、星の速さはほぼそろえる
         const v = R * base.drag * rnd(0.96, 1.04);
         this.spawn(x, y, z, dx * v, dy * v, dz * v, {
-          ...base, life: base.life * rnd(0.85, 1.15), c1, c2, sw: rnd(0.42, 0.52),
+          ...base, life: base.life * rnd(0.85, 1.15), c1, c2, sw: rnd(0.42, 0.52), dp,
         });
       }
-      if (spec.pistil && t !== 'ring') {
+      if (t === 'saturn') {
+        const rc = PAL[pick(Object.keys(PAL))];
+        for (const [dx, dy, dz] of this.ringDirs(Math.round(n * 0.5))) {
+          const v = R * 1.3 * base.drag * rnd(0.98, 1.02);
+          this.spawn(x, y, z, dx * v, dy * v, dz * v, { ...base, life: base.life * rnd(0.9, 1.1), c1: rc, c2: null });
+        }
+      }
+      if (spec.pistil && base.die === undefined && t !== 'ring' && t !== 'palm') {
         for (const [dx, dy, dz] of this.sphereDirs(Math.round(n * 0.3))) {
           const v = R * 0.45 * base.drag * rnd(0.95, 1.05);
           this.spawn(x, y, z, dx * v, dy * v, dz * v, { ...base, emit: 0, bright: base.bright * 0.6, life: base.life * 0.8 * rnd(0.9, 1.1), c1: spec.pistil, c2: null });
         }
       }
       // 開いた瞬間の閃光
-      this.spawn(x, y, z, 0, 0, 0, { life: 0.1, c1: [1, 0.95, 0.85], size: R * 0.07, bright: 3 * (this.calm ? 0.5 : 1) });
+      this.spawn(x, y, z, 0, 0, 0, { life: 0.1, c1: [1, 0.95, 0.85], size: R * 0.06, bright: 1.6 * (this.calm ? 0.5 : 1) });
 
       const [lx, ly] = this.proj(x, y, z);
       const m = Math.max(c1[0], c1[1], c1[2]);
-      this.lights.push({ x: lx, y: ly, r: R / z * this.f * 2.6, col: [c1[0] / m, c1[1] / m, c1[2] / m], I: (0.3 + R / 160) * (this.calm ? 0.5 : 1) });
+      this.lights.push({ x: lx, y: ly, r: R / z * this.f * 2.6, col: [c1[0] / m, c1[1] / m, c1[2] / m], I: (0.2 + R / 160) * (this.calm ? 0.5 : 1) });
       if (this.lights.length > MAX_LIGHTS) this.lights.shift();
       // 大きな花火の衝撃で、手前の湖面にも波紋が立つ
       if (R > 75) this.ripple(rnd(-20, 20), rnd(15, 55), -0.25 * (R / 100));
+    }
+
+    /** 燃え尽きたときに割れる星(分裂・千輪) */
+    die(b) {
+      const P = this.P;
+      const x = P[b + X], y = P[b + Y], z = P[b + Z];
+      const second = P[b + AGE] / P[b + LIFE] >= P[b + SW];
+      const c = second ? [P[b + R2], P[b + G2], P[b + B2]] : [P[b + R1], P[b + G1], P[b + B1]];
+      const dp = P[b + DP];
+      if (P[b + DIE] === 1) {
+        const a0 = Math.random() * Math.PI;
+        for (let k = 0; k < 4; k++) {
+          const a = a0 + k * Math.PI / 2;
+          this.spawn(x, y, z, Math.cos(a) * dp + P[b + VX] * 0.3, Math.sin(a) * dp + P[b + VY] * 0.3, rnd(-0.2, 0.2) * dp,
+            { life: rnd(0.8, 1.0), c1: c, size: 1.3, streak: 0.08, bright: 2.6, drag: 1.5 });
+        }
+      } else {
+        const cc = PAL[pick(Object.keys(PAL))];
+        for (const [dx, dy, dz] of this.sphereDirs(this.calm ? 8 : 14)) {
+          this.spawn(x, y, z, dx * dp, dy * dp, dz * dp, { life: rnd(0.7, 1.0), c1: cc, size: 1.0, streak: 0.04, bright: 2.4, drag: 1.4 });
+        }
+      }
+      this.spawn(x, y, z, 0, 0, 0, { life: 0.06, c1: [1, 1, 0.95], size: 1.2, bright: 4 });
+    }
+
+    // ヤシ: 上向きの半球に、まばらに向ける
+    palmDirs(n) {
+      const out = [];
+      const rot = Math.random() * Math.PI * 2;
+      for (let i = 0; i < n; i++) {
+        const th = rot + (i / n) * Math.PI * 2;
+        const el = rnd(0.25, 1.0);
+        out.push([Math.cos(th) * Math.cos(el), Math.sin(el), Math.sin(th) * Math.cos(el)]);
+      }
+      return out;
     }
 
     // 球面にむらなく並べた向き(フィボナッチ格子)を、毎回ランダムに回す
@@ -524,6 +620,11 @@ void main() {
         out.push([x, y, z]);
       }
       return out;
+    }
+
+    /** 頭出しのとき、もう予定と合わない空中の玉を消す */
+    clearShells() {
+      this.shells.length = 0;
     }
 
     /** 高音の粒立ち: 燃えている星のそばで、小さな火花がはじける */
@@ -558,7 +659,8 @@ void main() {
         const z = 520;
         const x = (px - this.W / 2) * z / this.f;
         const h = (py - this.hz) * z / this.f;
-        this.shells.push({ x, z, h, y: 0, t0: this.t, T: 1.0, spec: this.design(0.6, 0.5), R: 55 });
+        const spec = this.design('bar', 0.6, 0.5);
+        this.shells.push({ x, z, h, y: 0, t0: this.t, T: 1.0, spec, R: spec.R * 0.8 });
         return true;
       }
       // 波を計算している手前の範囲より奥を押したときは、範囲の奥の端に立てる
@@ -596,6 +698,7 @@ void main() {
         const b = i * NF;
         P[b + AGE] += dt;
         if (P[b + AGE] >= P[b + LIFE] || P[b + Y] < 0) {
+          if (P[b + DIE] && P[b + Y] >= 0) this.die(b);
           // 最後の粒子をこの場所へ移して詰める
           this.n--;
           if (i < this.n) P.copyWithin(b, this.n * NF, this.n * NF + NF);
