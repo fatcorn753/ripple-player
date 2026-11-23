@@ -39,9 +39,17 @@
   // 重い端末では、描画の解像度を下げる(画質を自動で落とす仕組みが変える)
   let dprScale = 1;
 
+  // 花火の画面は、切り替えたときに初めて作る
+  const fwCanvas = $('#fireworks');
+  /** @type {Fireworks|null} */
+  let fw = null;
+  /** 'water' か 'fw' */
+  let mode = 'water';
+
   function resize() {
-    if (!water) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2) * dprScale;
+    if (fw) fw.resize(innerWidth, innerHeight, dpr);
+    if (!water) return;
     water.resize(innerWidth, innerHeight, dpr);
     const [w, h] = water.size;
     cd.x = w / 2;
@@ -133,7 +141,7 @@
   // 1 段目: 光の色のにじみとブルームを省く。2 段目以降: 描画の解像度を下げる(波は作り直しで消える)
   let slowSum = 0;
   let slowN = 0;
-  function watchSpeed(dt) {
+  function watchSpeed(dt, renderer) {
     if (dt <= 0 || dt > 0.25) return;
     slowSum += dt;
     slowN++;
@@ -142,19 +150,98 @@
     slowSum = 0;
     slowN = 0;
     if (avg < 1 / 40) return;
-    if (water.quality === 'high') water.quality = 'low';
+    if (renderer.quality === 'high') renderer.quality = 'low';
     else if (dprScale > 0.5) {
       dprScale = Math.max(0.5, dprScale * 0.75);
       resize();
     }
   }
 
+  // ---------- 音から花火へ ----------
+  // 曲を先に解析できたときは、拍の 1.25 秒前に打ち上げ、ちょうど拍で開くようにする。
+  // 解析できないとき(タブやマイクの音、解析中)は、拍を聞いてからすぐ開く
+  const RISE = 1.25;
+  const MINLEAD = 0.35;
+  let schedMap = null;
+  let schedIdx = 0;
+  let lastVt = -1;
+  let lastFire = -1e9;
+  let lastLiveFire = 0;
+  let fwIdleAt = 0;
+  let fwMood = 0;
+
+  // 画面に音が届くまでの遅れ。この分だけ遅らせた曲の時刻に合わせて開く
+  function visualTime() {
+    const c = analyzer.ctx;
+    const lat = c ? (c.outputLatency || 0) + (c.baseLatency || 0) : 0;
+    return audio.currentTime - lat;
+  }
+
+  function firstOnset(onsets, t) {
+    let lo = 0, hi = onsets.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (onsets[m].t < t) lo = m + 1;
+      else hi = m;
+    }
+    return lo;
+  }
+
+  function fwDrive(now, dt) {
+    const t = now / 1000;
+    const a = analyzer.update(t);
+    const playing = isOn();
+    fw.calm = reduceMotion.matches;
+    const I = playing ? a.intensity : 0;
+    fwMood += (I - fwMood) * Math.min(dt * 0.8, 1);
+    fw.wind = (0.5 + 0.7 * fwMood) * (fw.calm ? 0.5 : 1);
+    const tr = !live && index >= 0 ? tracks[index] : null;
+    const map = tr && tr.map;
+
+    if (playing && map) {
+      const vt = visualTime();
+      // 曲が変わった・解析が届いた・頭出しした ときは、予定を今の位置から組み直す
+      if (map !== schedMap || vt < lastVt - 0.05 || vt > lastVt + 0.8) {
+        schedMap = map;
+        schedIdx = firstOnset(map.onsets, vt + MINLEAD);
+        lastFire = -1e9;
+      }
+      lastVt = vt;
+      while (schedIdx < map.onsets.length && map.onsets[schedIdx].t <= vt + RISE) {
+        const o = map.onsets[schedIdx++];
+        const Io = envAt(map, o.t);
+        // 静かな所では間を空け、山場では拍ごとに上げる。特に強い拍は必ず上げる
+        if (o.t - lastFire < 0.95 - 0.7 * Io && o.s < 0.85) continue;
+        lastFire = o.t;
+        fw.launch(fw.design(o.s, Io), o.t - vt);
+      }
+    } else if (playing && a.beat && t - lastLiveFire > 0.95 - 0.7 * I) {
+      lastLiveFire = t;
+      fw.launch(fw.design(a.accent, I), 0);
+    }
+    // 高音の粒立ちは、燃えている星のはじける音にする
+    if (playing && a.hat && !fw.calm) fw.crackle(Math.round(2 + 8 * a.hat * I));
+    // 止まっている間も、ときどき小さな花火を上げる
+    if (!playing && t > fwIdleAt) {
+      fw.launch(fw.design(0.2, 0.15), 1.4);
+      fwIdleAt = t + 3 + Math.random() * 4;
+    }
+  }
+
   function frame(now) {
-    if (water && !document.hidden) {
-      const dt = drive(now);
-      water.step(dt, cd);
-      water.draw(cd);
-      watchSpeed(dt);
+    if (!document.hidden) {
+      if (mode === 'fw' && fw) {
+        const dt = Math.min((now - last) / 1000, 0.1);
+        fwDrive(now, dt);
+        fw.update(dt);
+        fw.draw(dt);
+        watchSpeed(dt, fw);
+      } else if (water) {
+        const dt = drive(now);
+        water.step(dt, cd);
+        water.draw(cd);
+        watchSpeed(dt, water);
+      }
     }
     last = now;
     requestAnimationFrame(frame);
@@ -163,6 +250,54 @@
 
   canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
   canvas.addEventListener('webglcontextrestored', () => location.reload());
+  fwCanvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
+  fwCanvas.addEventListener('webglcontextrestored', () => location.reload());
+
+  // 空を押すとそこに花火が上がり、湖を押すと波紋が立つ
+  fwCanvas.addEventListener('pointerdown', (e) => {
+    if (fw) fw.poke(e.clientX, e.clientY);
+  });
+
+  // ---------- 水面と花火の切り替え ----------
+  const MODE_KEY = 'ripple-player:mode';
+  const modeBtn = $('#mode-btn');
+
+  // 曲の拍を先に調べておく。失敗しても、拍を聞いてから上げる方法で動く
+  async function ensureMap(tr) {
+    if (!tr || tr.map || tr.mapPending || tr.mapFailed || !window.analyzeBeats) return;
+    tr.mapPending = true;
+    try {
+      const buf = await (await fetch(tr.url)).arrayBuffer();
+      tr.map = await analyzeBeats(buf);
+    } catch (e) {
+      tr.mapFailed = true;
+    }
+    tr.mapPending = false;
+  }
+
+  function setMode(m, save = true) {
+    if (m === 'fw' && !fw) {
+      try {
+        fw = new Fireworks(fwCanvas);
+        resize();
+      } catch (e) {
+        toast('この端末やブラウザでは花火を描けませんでした。(' + e.message + ')');
+        m = 'water';
+      }
+    }
+    if (m === 'water' && !water) m = fw ? 'fw' : 'water';
+    mode = m;
+    const isFw = m === 'fw';
+    canvas.hidden = isFw;
+    fwCanvas.hidden = !isFw;
+    modeBtn.setAttribute('aria-pressed', String(isFw));
+    modeBtn.setAttribute('aria-label', isFw ? '水面にする' : '花火にする');
+    modeBtn.title = isFw ? '水面にする (M)' : '花火にする (M)';
+    if (isFw && index >= 0) ensureMap(tracks[index]);
+    if (save) {
+      try { localStorage.setItem(MODE_KEY, m); } catch (e) { /* 保存できなくても切り替えは効く */ }
+    }
+  }
 
   // 水面を指でなぞると波が立つ
   let lastPt = null;
@@ -285,6 +420,7 @@
     document.title = tracks[i].name + ' — 波紋プレーヤー';
     if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: tracks[i].name });
     renderList();
+    if (mode === 'fw') ensureMap(tracks[i]);
     if (autoplay) play();
   }
 
@@ -378,6 +514,7 @@
     else if (act === 'prev') step(-1);
     else if (act === 'next') step(1);
     else if (act === 'list') toggleList();
+    else if (act === 'mode') setMode(mode === 'fw' ? 'water' : 'fw');
   });
   fileInput.addEventListener('change', () => {
     addFiles(fileInput.files);
@@ -403,7 +540,8 @@
     if (e.key === ' ') {
       e.preventDefault();
       togglePlay();
-    } else if (live) return;
+    } else if (e.key === 'm' || e.key === 'M') setMode(mode === 'fw' ? 'water' : 'fw');
+    else if (live) return;
     else if (e.key === 'ArrowRight' && index >= 0) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5);
     else if (e.key === 'ArrowLeft' && index >= 0) audio.currentTime = Math.max(0, audio.currentTime - 5);
     else if (e.key === 'n' || e.key === 'N') step(1);
@@ -584,4 +722,7 @@
 
   syncPlay();
   renderList();
+  let savedMode = 'water';
+  try { savedMode = localStorage.getItem(MODE_KEY) || 'water'; } catch (e) { /* 読めなければ水面 */ }
+  setMode(savedMode === 'fw' ? 'fw' : 'water', false);
 })();

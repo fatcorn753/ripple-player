@@ -731,4 +731,6 @@ void main() {
   }
 
   window.Water = Water;
+  // 花火の画面でも、波・ブルーム・仕上げのシェーダーを使い回す
+  window.GLKit = { VS, SIM_FS, DROP_FS, BRIGHT_FS, BLUR_FS, FINAL_FS, MAX_DROPS, compile, program };
 })();

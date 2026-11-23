@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>波紋プレーヤー</title>
 <!-- 版番号: GitHub Pages は 10 分キャッシュするので、更新時に上げて HTML と js の版のずれを防ぐ -->
-<link rel="stylesheet" href="tokens.css?v=4">
-<link rel="stylesheet" href="base.css?v=4">
-<link rel="stylesheet" href="components.css?v=4">
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="stylesheet" href="tokens.css?v=5">
+<link rel="stylesheet" href="base.css?v=5">
+<link rel="stylesheet" href="components.css?v=5">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 <canvas id="water" role="img" aria-label="曲に合わせて、中央の CD から波紋が広がる水面"></canvas>
+<canvas id="fireworks" role="img" aria-label="曲に合わせて花火が上がり、湖面に映る夜空" hidden></canvas>
 
 <p class="gl-error" id="gl-error" role="alert" hidden></p>
 
@@ -74,6 +75,9 @@
       <button class="td-btn" data-variant="ghost" data-icon-only type="button" data-action="live" data-kind="mic" aria-label="マイクで音を拾う" aria-pressed="false" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>
       </button>
+      <button class="td-btn" data-variant="ghost" data-icon-only type="button" data-action="mode" id="mode-btn" aria-label="花火にする" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg>
+      </button>
       <button class="td-btn" data-variant="ghost" data-icon-only type="button" aria-label="再生リスト" aria-expanded="false" aria-controls="playlist" data-action="list" id="list-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
       </button>
@@ -88,8 +92,10 @@
 <audio id="audio" preload="metadata"></audio>
 <div class="td-toast-region" aria-live="polite"></div>
 
-<script src="water.js?v=4"></script>
-<script src="audio.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="water.js?v=5"></script>
+<script src="audio.js?v=5"></script>
+<script src="beatmap.js?v=5"></script>
+<script src="fireworks.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
